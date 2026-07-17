@@ -1,0 +1,193 @@
+(ns precinctops.actor-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [precinctops.actor :as actor]
+            [precinctops.advisor :as advisor]
+            [precinctops.governor :as governor]
+            [precinctops.store :as store]))
+
+(defn- fresh-store []
+  (let [st (store/mem-store)]
+    (store/register-officer! st {:officer-id "O-1" :name "Ofc. Delgado"
+                                 :precinct-id "precinct-9" :verified? true})
+    (store/register-equipment! st {:equipment-id "E-1" :precinct-id "precinct-9"
+                                   :max-supply-cost 500 :verified? true})
+    st))
+
+;; --- happy paths ------------------------------------------------------
+
+(deftest commits-a-well-formed-equipment-log-entry
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:op :log-equipment-record :stake :low :officer-id "O-1" :equipment-id "E-1"
+                  :condition :good :mileage 45210 :inspected-by "Ofc. Delgado" :timestamp "2026-07-14T10:00:00Z"}
+        result (actor/run-request! graph request {} "thread-1")]
+    (is (= :done (:status result)))
+    (is (some? (get-in result [:state :record])))
+    (is (= 1 (count (store/records-of st "E-1"))))))
+
+(deftest commits-a-patrol-operation-scheduling
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:op :schedule-patrol-operation :stake :low :officer-id "O-1" :equipment-id "E-1"
+                  :shift-start "2026-07-20T09:00:00Z" :shift-end "2026-07-20T17:00:00Z" :route "beat-12"}
+        result (actor/run-request! graph request {} "thread-2")]
+    (is (= :done (:status result)))
+    (is (= 1 (count (store/records-of st "E-1"))))))
+
+(deftest commits-an-at-or-below-threshold-supply-order
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:op :coordinate-supply-order :stake :low :officer-id "O-1" :equipment-id "E-1"
+                  :item "replacement tires" :cost 220 :vendor "FleetSupplyCo" :category :vehicle-parts}
+        result (actor/run-request! graph request {} "thread-3")]
+    (is (= :done (:status result)))
+    (is (some? (get-in result [:state :record])))))
+
+;; --- hard blocks --------------------------------------------------------
+
+(deftest holds-an-unverified-officer-proposal
+  (let [st (fresh-store)]
+    (store/register-officer! st {:officer-id "O-2" :name "Unverified"
+                                 :precinct-id "precinct-9" :verified? false})
+    (let [graph (actor/build-graph {:store st})
+          request {:op :log-equipment-record :stake :low :officer-id "O-2" :equipment-id "E-1"
+                    :condition :good :mileage 100 :inspected-by "O-2" :timestamp "2026-07-14T10:00:00Z"}
+          result (actor/run-request! graph request {} "thread-4")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-1"))))))
+
+(deftest holds-an-unverified-equipment-proposal
+  (let [st (fresh-store)]
+    (store/register-equipment! st {:equipment-id "E-2" :precinct-id "precinct-9"
+                                   :max-supply-cost 500 :verified? false})
+    (let [graph (actor/build-graph {:store st})
+          request {:op :log-equipment-record :stake :low :officer-id "O-1" :equipment-id "E-2"
+                    :condition :good :mileage 100 :inspected-by "Ofc. Delgado" :timestamp "2026-07-14T10:00:00Z"}
+          result (actor/run-request! graph request {} "thread-5")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-2"))))))
+
+(deftest holds-a-cross-precinct-equipment-proposal
+  (let [st (fresh-store)]
+    (store/register-equipment! st {:equipment-id "E-3" :precinct-id "precinct-1"
+                                   :max-supply-cost 500 :verified? true})
+    (let [graph (actor/build-graph {:store st})
+          request {:op :log-equipment-record :stake :low :officer-id "O-1" :equipment-id "E-3"
+                    :condition :good :mileage 100 :inspected-by "Ofc. Delgado" :timestamp "2026-07-14T10:00:00Z"}
+          result (actor/run-request! graph request {} "thread-6")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-3"))))))
+
+(deftest holds-a-tactical-assessment-attempt
+  (testing "log-equipment-record can never carry a tactical/incident assessment, even via a custom advisor"
+    (let [st (fresh-store)
+          rogue (reify advisor/Advisor
+                  (-advise [_ _store _request]
+                    {:op :log-equipment-record :effect :propose :officer-id "O-1" :equipment-id "E-1"
+                     :threat-level :elevated :stake :low :confidence 0.9
+                     :rationale "documented log-equipment-record for equipment E-1"}))
+          graph (actor/build-graph {:store st :advisor rogue})
+          result (actor/run-request! graph {:op :log-equipment-record} {} "thread-7")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-1"))))))
+
+(deftest holds-a-tactical-dispatch-attempt
+  (testing "schedule-patrol-operation can never carry a real-time tactical dispatch, even via a custom advisor"
+    (let [st (fresh-store)
+          rogue (reify advisor/Advisor
+                  (-advise [_ _store _request]
+                    {:op :schedule-patrol-operation :effect :propose :officer-id "O-1" :equipment-id "E-1"
+                     :active-incident-id "INC-42" :stake :low :confidence 0.9
+                     :rationale "documented schedule-patrol-operation for equipment E-1"}))
+          graph (actor/build-graph {:store st :advisor rogue})
+          result (actor/run-request! graph {:op :schedule-patrol-operation} {} "thread-8")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-1"))))))
+
+(deftest holds-a-weapon-procurement-attempt-even-via-a-rogue-advisor
+  (testing "coordinate-supply-order can never name a weapon/ammunition item, even via a custom advisor, and
+            regardless of how low the cost is (not merely gated by the cost threshold)"
+    (let [st (fresh-store)
+          rogue (reify advisor/Advisor
+                  (-advise [_ _store _request]
+                    {:op :coordinate-supply-order :effect :propose :officer-id "O-1" :equipment-id "E-1"
+                     :item "9mm service pistol" :cost 1 :vendor "ArmsCo" :stake :low :confidence 0.9
+                     :rationale "documented coordinate-supply-order for equipment E-1"}))
+          graph (actor/build-graph {:store st :advisor rogue})
+          result (actor/run-request! graph {:op :coordinate-supply-order} {} "thread-8b")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-1"))))))
+
+;; --- END-TO-END: rogue advisor driven through the full compiled graph,
+;; --- proving :commit can never be reached for any forbidden action ------
+
+(deftest holds-every-scope-excluded-op-attempt-even-via-a-rogue-advisor
+  (testing "no path through this actor can use force, deploy a weapon, make an arrest, detain a person,
+            authorize a search/seizure, or pursue/engage a suspect — proven by forcing a rogue advisor to
+            propose each named op through the FULL COMPILED STATEGRAPH (not just governor/check in isolation).
+            Even a compromised/malicious advisor node cannot reach :commit for any of these."
+    (doseq [op governor/scope-excluded-ops]
+      (let [st (fresh-store)
+            rogue (reify advisor/Advisor
+                    (-advise [_ _store _request]
+                      {:op op :effect :propose :officer-id "O-1" :equipment-id "E-1"
+                       :stake :low :confidence 0.99
+                       :rationale (str "documented " (name op) " for equipment E-1")}))
+            graph (actor/build-graph {:store st :advisor rogue})
+            result (actor/run-request! graph {:op op} {} (str "thread-scope-" (name op)))]
+        (is (= :hold (:disposition (:state result))) (str "op " op " was not held"))
+        (is (not= :commit (:disposition (:state result))) (str "op " op " reached :commit"))
+        (is (empty? (store/records-of st "E-1")) (str "op " op " committed a record"))))))
+
+(deftest holds-a-scope-excluded-rationale-attempt-even-via-a-rogue-advisor
+  (testing "an otherwise-allowed op whose rationale smuggles a finalization/execution action phrase is held,
+            proven through the full compiled graph"
+    (let [st (fresh-store)
+          rogue (reify advisor/Advisor
+                  (-advise [_ _store _request]
+                    {:op :log-equipment-record :effect :propose :officer-id "O-1" :equipment-id "E-1"
+                     :condition :good :mileage 100 :inspected-by "Ofc. Delgado" :timestamp "2026-07-14T10:00:00Z"
+                     :stake :low :confidence 0.99
+                     :rationale "logged the equipment in order to use force on the suspect"}))
+          graph (actor/build-graph {:store st :advisor rogue})
+          result (actor/run-request! graph {:op :log-equipment-record} {} "thread-9")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-1"))))))
+
+(deftest holds-a-forged-direct-actuation-attempt-even-via-a-rogue-advisor
+  (testing "even a rogue advisor that forges :effect away from :propose (attempting direct actuation/dispatch
+            instead of proposing) is held before any record commits"
+    (let [st (fresh-store)
+          rogue (reify advisor/Advisor
+                  (-advise [_ _store _request]
+                    {:op :log-equipment-record :effect :direct-dispatch :officer-id "O-1" :equipment-id "E-1"
+                     :condition :good :stake :low :confidence 0.99
+                     :rationale "documented log-equipment-record for equipment E-1"}))
+          graph (actor/build-graph {:store st :advisor rogue})
+          result (actor/run-request! graph {:op :log-equipment-record} {} "thread-9b")]
+      (is (= :hold (:disposition (:state result))))
+      (is (empty? (store/records-of st "E-1"))))))
+
+;; --- escalation / human-in-the-loop --------------------------------------
+
+(deftest interrupts-then-approves-flag-precinct-concern-on-human-approval
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:op :flag-precinct-concern :stake :low :officer-id "O-1" :equipment-id nil
+                  :reason :training-gap :note "in-service training overdue for shift B"}
+        interrupted (actor/run-request! graph request {} "thread-10")]
+    (is (= :interrupted (:status interrupted)))
+    (let [resumed (actor/approve! graph "thread-10")]
+      (is (= :done (:status resumed)))
+      (is (some? (get-in resumed [:state :record]))))))
+
+(deftest interrupts-then-approves-above-threshold-supply-order-on-human-approval
+  (let [st (fresh-store)
+        graph (actor/build-graph {:store st})
+        request {:op :coordinate-supply-order :stake :low :officer-id "O-1" :equipment-id "E-1"
+                  :item "replacement patrol vehicle" :cost 35000 :vendor "FleetSupplyCo" :category :vehicle}
+        interrupted (actor/run-request! graph request {} "thread-11")]
+    (is (= :interrupted (:status interrupted)))
+    (let [resumed (actor/approve! graph "thread-11")]
+      (is (= :done (:status resumed)))
+      (is (some? (get-in resumed [:state :record]))))))

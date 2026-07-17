@@ -1,0 +1,122 @@
+(ns precinctops.advisor
+  "Precinct Coordination Advisor — the advisor named in this
+  repository's README, proposing a precinct/equipment/patrol-scheduling
+  documentation/logistics operation (log a non-weapon equipment/vehicle
+  readiness record, schedule an administrative shift/patrol-route
+  operation, flag a precinct concern for human officer/supervisor
+  review, or coordinate a non-weapon equipment supply order) from an
+  officer's equipment roster, patrol schedule and supply policy.
+  Swappable mock/llm; the advisor ONLY proposes —
+  `precinctops.governor` checks officer/equipment verification and
+  scope independently and always escalates precinct-concern flags and
+  above-threshold supply orders. Modeled on cloud-itonami-isco-3355's
+  caseadmin.advisor.
+
+  This advisor NEVER proposes using force, deploying a weapon, making
+  an arrest, detaining a person, authorizing a search or seizure, or
+  pursuing/engaging a suspect — no such op exists anywhere in the
+  closed allowlist below (`precinctops.governor/closed-op-allowlist`),
+  and the rationale text this advisor emits never uses a finalization/
+  execution phrase for any of those actions
+  (`precinctops.governor/scope-excluded-terms`), so the advisor's own
+  DEFAULT proposals never self-trip the governor's scope-exclusion
+  check (see `precinctops.governor-test/
+  default-mock-advisor-proposals-never-self-trip-scope-exclusion`).
+  Any observation suggesting a precinct/equipment/training concern
+  needs human attention is surfaced ONLY via `:flag-precinct-concern`,
+  which always escalates to a human officer/supervisor and never
+  auto-commits — the robot's role ends at 'here is the equipment log /
+  the proposed roster / the flagged concern', never 'here is what
+  enforcement action to take'.
+
+  A proposal:
+  {:op :log-equipment-record|:schedule-patrol-operation|
+       :flag-precinct-concern|:coordinate-supply-order
+   :effect :propose :officer-id str :equipment-id (str or nil, only nil
+   for :flag-precinct-concern) :stake kw :confidence n :rationale str,
+   plus op-specific fields (:condition/:mileage/:inspected-by/:timestamp
+   for log-equipment-record; :shift-start/:shift-end/:route for
+   schedule-patrol-operation; :reason/:note for
+   flag-precinct-concern; :item/:cost/:vendor/:category for
+   coordinate-supply-order)}"
+  (:require [clojure.edn :as edn]))
+
+(defprotocol Advisor
+  (-advise [advisor store request] "request -> proposal map"))
+
+(defn- rationale-for [op equipment-id]
+  (str "documented " (name op)
+       (if equipment-id (str " for equipment " equipment-id) " (no equipment reference — precinct-level concern)")))
+
+(defn- infer [_store {:keys [op stake officer-id equipment-id] :as request}]
+  (let [base {:op op
+              :effect :propose
+              :officer-id officer-id
+              :equipment-id equipment-id
+              :stake (or stake :low)
+              :confidence (case (or stake :low) :high 0.7 :medium 0.85 :low 0.95)
+              :rationale (rationale-for op equipment-id)}]
+    (merge base
+           (case op
+             :log-equipment-record
+             (select-keys request [:condition :mileage :inspected-by :timestamp])
+             :schedule-patrol-operation
+             (select-keys request [:shift-start :shift-end :route])
+             :flag-precinct-concern
+             (select-keys request [:reason :note])
+             :coordinate-supply-order
+             (select-keys request [:item :cost :vendor :category])
+             {}))))
+
+(defn mock-advisor []
+  (reify Advisor
+    (-advise [_ store request] (infer store request))))
+
+(def ^:private system-prompt
+  "You are a precinct/equipment/patrol-scheduling documentation and
+   administrative-logistics coordination advisor for a police precinct.
+   Given a request, propose an :op, the :officer-id and (when relevant)
+   :equipment-id plus the op's own fields, an honest :confidence and a
+   :stake. You are a documentation and logistics-coordination robot
+   ONLY — you help log non-weapon equipment/vehicle readiness records,
+   schedule administrative shift/patrol-route operations, and
+   coordinate non-weapon equipment supply orders. Never propose an op
+   outside the closed four-op allowlist (:log-equipment-record,
+   :schedule-patrol-operation, :flag-precinct-concern,
+   :coordinate-supply-order), and NEVER propose using force of any
+   kind, deploying a weapon, making an arrest, detaining a person,
+   authorizing a search or seizure, or pursuing/engaging a suspect —
+   that authority does not exist for you, under any circumstance, at
+   any confidence level, in any phase. A :log-equipment-record entry is
+   equipment/vehicle condition metadata only, never a tactical
+   assessment. A :schedule-patrol-operation proposal is administrative
+   shift/patrol-route rostering only — never a real-time tactical
+   dispatch during an active incident. A :coordinate-supply-order may
+   only name non-weapon equipment (vehicles, radios, protective gear) —
+   never a weapon, ammunition or other lethal/less-lethal equipment
+   item. Any indication that a precinct/equipment/training concern
+   needs human officer/supervisor attention must be surfaced only via
+   :flag-precinct-concern, which always requires human review
+   regardless of confidence. The governor independently verifies
+   officer/equipment registration and always escalates precinct-concern
+   flags and above-threshold supply orders to a human.")
+
+(defn- parse-proposal [content]
+  (try
+    (let [p (edn/read-string content)]
+      (if (map? p)
+        (assoc p :effect :propose)
+        {:op :unknown :effect :propose :confidence 0.0 :stake :high
+         :rationale "unparseable LLM response"}))
+    (catch #?(:clj Exception :cljs js/Error) _
+      {:op :unknown :effect :propose :confidence 0.0 :stake :high
+       :rationale "LLM response parse failure"})))
+
+(defn llm-advisor
+  [chat-model model-generate-fn gen-opts]
+  (reify Advisor
+    (-advise [_ _store request]
+      (let [msgs [{:role :system :content system-prompt}
+                  {:role :user :content (str "operation request: " (pr-str request))}]
+            resp (model-generate-fn chat-model msgs gen-opts)]
+        (parse-proposal (:content resp))))))

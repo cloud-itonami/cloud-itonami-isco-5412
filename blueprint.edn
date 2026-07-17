@@ -1,0 +1,11 @@
+[{:itonami.blueprint/social-impact [:due-process-integrity :officer-equipment-readiness :patrol-coverage-continuity]
+  :itonami.blueprint/domain :public-safety/precinct-equipment-and-patrol-logistics-coordination
+  :itonami.blueprint/required-technologies [:robotics :identity :audit-ledger]
+  :itonami.blueprint/isco-08 "5412"
+  :itonami.blueprint/name "Police Precinct Equipment and Patrol-Scheduling Administrative-Logistics Coordination Practice"
+  :itonami.blueprint/governor :precinctops-governor
+  :itonami.blueprint/robotics true
+  :db/id -1
+  :itonami.blueprint/status :public-oss
+  :itonami.blueprint/id "cloud-itonami-isco-5412"
+  :itonami.blueprint/license "AGPL-3.0-or-later"}]
