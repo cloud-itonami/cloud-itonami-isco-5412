@@ -136,7 +136,7 @@
                                 item is a hard block per #7 above
                                 regardless of cost).
     11. low confidence (< `confidence-floor`)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [precinctops.store :as store]))
 
 (def confidence-floor 0.6)
@@ -276,8 +276,8 @@
   of `out-of-scope?` — it fires on the procurement item itself, not
   only on finalization language in free text."
   [proposal]
-  (let [text (str/lower-case (str (:item proposal) " " (:category proposal)))]
-    (boolean (some #(str/includes? text (str/lower-case %)) weapon-item-terms))))
+  (let [text (str/lower (str (:item proposal) " " (:category proposal)))]
+    (boolean (some #(str/includes? text (str/lower %)) weapon-item-terms))))
 
 (defn- forbidden-keys-present [proposal forbidden-keys]
   (seq (filter #(contains? proposal %) forbidden-keys)))
