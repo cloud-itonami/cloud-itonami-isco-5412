@@ -45,7 +45,7 @@ equipment log / the proposed roster / the flagged concern" — never
 (`precinctops.governor`), following the itonami actor pattern
 (ADR-2607121000): `:intake -> :advise -> :govern -> :decide -+-> :commit
 (:ok?) +-> :request-approval (:escalate?, human-in-the-loop interrupt)
-+-> :hold (:hard?)`. 54 tests / 203 assertions green (`clojure -M:test`).
++-> :hold (:hard?)`. 54 tests / 203 assertions green (`kbb -M:test`).
 
 HARD invariants (always hold, never overridable): officer provenance (a
 proposal must resolve to an independently registered AND verified
