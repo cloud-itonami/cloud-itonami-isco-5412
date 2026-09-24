@@ -39,7 +39,7 @@
    schedule-patrol-operation; :reason/:note for
    flag-precinct-concern; :item/:cost/:vendor/:category for
    coordinate-supply-order)}"
-  (:require [clojure.edn :as edn]))
+  (:require [kotoba.lang.edn :as edn]))
 
 (defprotocol Advisor
   (-advise [advisor store request] "request -> proposal map"))
