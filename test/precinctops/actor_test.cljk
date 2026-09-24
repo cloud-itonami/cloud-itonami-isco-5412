@@ -1,5 +1,5 @@
 (ns precinctops.actor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [precinctops.actor :as actor]
             [precinctops.advisor :as advisor]
             [precinctops.governor :as governor]
