@@ -1,0 +1,35 @@
+;; What this vertical's robot physically does, declared for
+;; kotoba.robotics.process (kotoba-lang/robotics). `kbb -M:physics` runs it.
+;;
+;; README "Robotics premise": a precinct/equipment/patrol-scheduling
+;; coordination robot handles equipment-readiness data entry, patrol rostering
+;; and non-weapon supply-order coordination for police officers (ISCO 5412).
+;; Its physical work is equipment logistics: carrying crates of non-weapon
+;; supplies (radio batteries, reflective vests, forms) from the supply room to
+;; the duty desk, and seating radio battery packs into a wall charging rack.
+;; It never handles weapons, restraints or persons.
+;;
+;; Every number without a cited source is marked `estimate` in its :basis.
+;; Replacing an estimate with a sourced value is this bot's growth work.
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isco-5412"
+ :cases
+ [{:id :supply-crate-to-duty-desk
+   :kind :transport
+   :procedure "courier robot carries a crate of non-weapon supplies from the precinct supply room to the duty desk"
+   :params {:mass-kg 50.0 :distance-m 40.0 :v-max-mps 1.0 :a-max-mps2 0.5
+            :brake-decel-mps2 0.8 :drive-force-n 60.0 :crr 0.02
+            :cog-height-m 0.50 :support-half-length-m 0.25}
+   :sweep {:param :payload-kg :values [5.0 15.0 30.0 60.0 100.0]}
+   :quantity :cycle-time-s
+   :limit {:max 60.0 :basis "estimate: one supply-room-to-desk leg must fit inside a 1-minute slot between shift-change briefings"}
+   :boundary {:lo 1.0 :hi 250.0}}
+  {:id :radio-battery-to-charger-rack
+   :kind :manipulator
+   :procedure "arm seats a radio battery pack (or a tray of packs) from the return bin into the wall charging rack"
+   :params {:l1-m 0.35 :l2-m 0.30 :m1-kg 2.5 :m2-kg 1.8
+            :from [0.45 0.00] :to [0.15 0.50] :duration-s 1.5 :steps 400}
+   :sweep {:param :payload-kg :values [0.3 0.6 1.2 2.4 4.0]}
+   :quantity :peak-tau1-nm
+   :limit {:max 30.0 :basis "estimate: continuous shoulder torque of a light (~3 kg payload class) collaborative arm"}
+   :boundary {:lo 0.1 :hi 15.0}}]}
