@@ -1,7 +1,7 @@
 (ns precinctops.store
   "SSoT for the ISCO-08 5412 police officers precinct/equipment/patrol-
   scheduling DOCUMENTATION/LOGISTICS COORDINATION actor (itonami actor
-  pattern, ADR-2607121000 / CLAUDE.md Actors section; README's
+  pattern, ADR-2607121000 / AGENTS.md Actors section; README's
   'Robotics premise' — a precinct/equipment/patrol-scheduling
   coordination robot performs equipment-readiness data entry,
   shift/patrol-route rostering and non-weapon supply-order coordination
